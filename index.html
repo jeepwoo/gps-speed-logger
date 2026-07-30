@@ -15,6 +15,7 @@
     --accent: #4ea3ff;
     --go: #2ecc71;
     --stop: #ff5a5a;
+    --warn: #ffc44d;
   }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   body {
@@ -30,23 +31,41 @@
   }
   h1 {
     font-size: 15px; font-weight: 600; letter-spacing: .02em;
-    color: var(--dim); margin: 20px 0 14px; text-align: center;
+    color: var(--dim); margin: 18px 0 12px; text-align: center;
   }
 
   .speed {
     background: var(--panel); border: 1px solid var(--line); border-radius: 18px;
-    padding: 22px 16px 18px; text-align: center;
+    padding: 20px 16px 14px; text-align: center;
   }
   .speed .val {
-    font-size: 76px; font-weight: 700; line-height: 1;
+    font-size: 74px; font-weight: 700; line-height: 1;
     font-variant-numeric: tabular-nums; letter-spacing: -.03em;
   }
-  .speed .unit { font-size: 15px; color: var(--dim); margin-top: 8px; }
-  .speed .src { font-size: 12px; color: var(--dim); margin-top: 10px; min-height: 15px; }
-
-  .grid {
-    display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px;
+  .speed .unit { font-size: 15px; color: var(--dim); margin-top: 7px; }
+  .speed .src {
+    font-size: 12px; color: var(--dim); margin-top: 9px; min-height: 15px;
+    font-weight: 600;
   }
+  .speed .src.hold { color: var(--warn); }
+  .speed .src.bad  { color: var(--stop); }
+
+  /* 진단 스트립 */
+  .diag {
+    display: grid; grid-template-columns: repeat(3, 1fr);
+    gap: 1px; margin-top: 14px; padding-top: 12px;
+    border-top: 1px solid var(--line);
+  }
+  .diag div { text-align: center; }
+  .diag .k { font-size: 10px; color: var(--dim); letter-spacing: .05em; }
+  .diag .v {
+    font-size: 15px; font-weight: 600; margin-top: 3px;
+    font-variant-numeric: tabular-nums;
+  }
+  .diag .v.bad { color: var(--stop); }
+  .diag .v.warn { color: var(--warn); }
+
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
   .cell {
     background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
     padding: 13px 14px;
@@ -71,15 +90,23 @@
   #toggle.rec  { background: var(--stop); border-color: var(--stop); color: #1a0505; }
   .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 
+  /* 모드 선택 */
+  .modes { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
+  .modes button { font-size: 14px; padding: 11px; font-weight: 500; }
+  .modes button.on {
+    border-color: var(--accent); color: var(--accent); background: #12202f;
+  }
+
   #log {
     margin-top: 14px; background: var(--panel); border: 1px solid var(--line);
     border-radius: 12px; padding: 11px 13px; font-size: 12px; color: var(--dim);
-    line-height: 1.65; max-height: 128px; overflow-y: auto;
+    line-height: 1.65; max-height: 140px; overflow-y: auto;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     white-space: pre-wrap; word-break: break-all;
   }
-  .warn { color: #ffc44d; }
+  .warn { color: var(--warn); }
   .err  { color: var(--stop); }
+  .ok   { color: var(--go); }
   .rec-dot {
     display: inline-block; width: 8px; height: 8px; border-radius: 50%;
     background: var(--stop); margin-right: 6px; vertical-align: 1px;
@@ -97,13 +124,24 @@
   <div class="val" id="spd">--</div>
   <div class="unit">km/h</div>
   <div class="src" id="src">대기 중</div>
+
+  <div class="diag">
+    <div><div class="k">위치오차</div><div class="v" id="dAcc">--</div></div>
+    <div><div class="k">샘플간격</div><div class="v" id="dDt">--</div></div>
+    <div><div class="k">구간이동</div><div class="v" id="dSeg">--</div></div>
+  </div>
 </div>
 
 <div class="grid">
   <div class="cell"><div class="k">경과 시간</div><div class="v" id="elapsed">00:00</div></div>
-  <div class="cell"><div class="k">수집 포인트</div><div class="v" id="count">0<small>개</small></div></div>
+  <div class="cell"><div class="k">수집 / 채택</div><div class="v" id="count">0 / 0</div></div>
   <div class="cell"><div class="k">누적 거리</div><div class="v" id="dist">0.00<small>km</small></div></div>
   <div class="cell"><div class="k">최고 / 평균</div><div class="v" id="minmax">0 / 0</div></div>
+</div>
+
+<div class="modes">
+  <button id="mWalk" class="on">도보 모드</button>
+  <button id="mCar">차량 모드</button>
 </div>
 
 <div class="btns">
@@ -114,7 +152,7 @@
   </div>
 </div>
 
-<div id="log">준비됨. [측정 시작]을 누르면 위치 권한을 요청합니다.</div>
+<div id="log">준비됨. 모드를 고르고 [측정 시작]을 누르세요.</div>
 
 <script>
 (() => {
@@ -122,26 +160,43 @@
 
   const $ = id => document.getElementById(id);
   const el = {
-    title: $('title'), spd: $('spd'), src: $('src'), elapsed: $('elapsed'),
-    count: $('count'), dist: $('dist'), minmax: $('minmax'),
+    title: $('title'), spd: $('spd'), src: $('src'),
+    dAcc: $('dAcc'), dDt: $('dDt'), dSeg: $('dSeg'),
+    elapsed: $('elapsed'), count: $('count'), dist: $('dist'), minmax: $('minmax'),
+    mWalk: $('mWalk'), mCar: $('mCar'),
     toggle: $('toggle'), save: $('save'), clear: $('clear'), log: $('log')
   };
 
-  let rows = [];          // 수집된 로우데이터
-  let watchId = null;
-  let wakeLock = null;
-  let timer = null;
+  // ── 필터 파라미터 (모드별)
+  //  ACC_MAX  : 이 값보다 위치오차가 크면 그 포인트는 계산에서 제외
+  //  MIN_DT   : 구간 최소 시간 — 너무 짧은 간격은 오차가 속도로 증폭됨
+  //  HOLD_MAX : 이 시간까지 유의미한 이동이 없으면 '정지'로 확정
+  //  NOISE_K  : 이동거리가 (위치오차 x K)보다 작으면 노이즈로 간주
+  //  V_MAX    : 물리적으로 불가능한 속도는 버림 (km/h)
+  //  Q        : 칼만 프로세스 노이즈 (m/s) — 클수록 측정값을 빨리 따라감
+  const MODES = {
+    walk: { ACC_MAX: 25, MIN_DT: 2.0, HOLD_MAX: 10, NOISE_K: 1.2, V_MAX: 25,  EMA: 0.30, Q: 0.8 },
+    car:  { ACC_MAX: 40, MIN_DT: 1.0, HOLD_MAX: 6,  NOISE_K: 0.8, V_MAX: 250, EMA: 0.45, Q: 4.0 }
+  };
+  let mode = 'walk';
+  const P = () => MODES[mode];
+
+  let rows = [];
+  let watchId = null, wakeLock = null, timer = null;
   let startedAt = null;
-  let prev = null;        // 직전 포인트 (속도 폴백 계산용)
-  let cumDist = 0;        // m
+  let anchor = null;      // 마지막으로 '채택'된 기준 포인트
+  let cumDist = 0;        // m — 채택된 구간만 누적
   let maxKmh = 0;
+  let ema = null;         // 표시용 평활 속도
+  let accepted = 0;       // 채택 포인트 수
+  let lastReason = '';
+  let firstFixT = null, lastFixT = null;   // 평균속도는 GPS 타임스탬프 기준
 
   const log = (msg, cls) => {
     const t = new Date().toLocaleTimeString('ko-KR', { hour12: false });
     el.log.innerHTML = `<span class="${cls || ''}">[${t}] ${msg}</span>\n` + el.log.innerHTML;
   };
 
-  // ── 두 좌표 간 거리 (Haversine, m)
   const haversine = (a, b) => {
     const R = 6371000, rad = Math.PI / 180;
     const dLat = (b.lat - a.lat) * rad, dLon = (b.lon - a.lon) * rad;
@@ -150,12 +205,31 @@
     return 2 * R * Math.asin(Math.sqrt(h));
   };
 
-  // ── 로컬 시각을 ISO 유사 문자열로 (엑셀이 바로 인식)
   const localStamp = ms => {
     const d = new Date(ms), p = (n, w = 2) => String(n).padStart(w, '0');
     return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ` +
            `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
   };
+
+  // ── 칼만 필터 (위치 평활)
+  //  GPS 원좌표는 정지 상태에서도 수 m~수십 m씩 튄다. 이 튐을 그대로 거리로
+  //  누적하면 속도가 폭주하므로, 측정 정확도를 신뢰도로 삼아 위치를 평활한다.
+  const kf = { lat: 0, lon: 0, variance: -1, t: 0 };
+
+  function kalman(lat, lon, acc, t) {
+    if (acc < 1) acc = 1;
+    if (kf.variance < 0) {                       // 첫 관측 — 그대로 채택
+      kf.lat = lat; kf.lon = lon; kf.t = t; kf.variance = acc * acc;
+    } else {
+      const dt = (t - kf.t) / 1000;
+      if (dt > 0) { kf.variance += dt * P().Q * P().Q; kf.t = t; }
+      const K = kf.variance / (kf.variance + acc * acc);   // 칼만 이득
+      kf.lat += K * (lat - kf.lat);
+      kf.lon += K * (lon - kf.lon);
+      kf.variance = (1 - K) * kf.variance;
+    }
+    return { lat: kf.lat, lon: kf.lon, sigma: Math.sqrt(kf.variance) };
+  }
 
   const fmtElapsed = s => {
     const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), sec = Math.floor(s % 60);
@@ -163,58 +237,127 @@
     return h ? `${h}:${p(m)}:${p(sec)}` : `${p(m)}:${p(sec)}`;
   };
 
-  // ── 화면 꺼짐 방지
   async function acquireWakeLock() {
     if (!('wakeLock' in navigator)) { log('WakeLock 미지원 — 화면이 꺼지면 수집이 멈춥니다.', 'warn'); return; }
     try {
       wakeLock = await navigator.wakeLock.request('screen');
-      wakeLock.addEventListener('release', () => log('화면 잠금 해제됨.', 'warn'));
+      wakeLock.addEventListener('release', () => { wakeLock = null; });
     } catch (e) { log('WakeLock 실패: ' + e.message, 'warn'); }
   }
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible' && watchId !== null && !wakeLock) acquireWakeLock();
   });
 
-  // ── 위치 수신
+  // ────────────────────────────────────────────────
+  //  위치 수신 — 필터링의 핵심
+  // ────────────────────────────────────────────────
   function onPosition(pos) {
-    const c = pos.coords;
-    const t = pos.timestamp;
-    const pt = { lat: c.latitude, lon: c.longitude, t };
+    const p = P();
+    const c = pos.coords, t = pos.timestamp;
+    const acc = (c.accuracy === null || Number.isNaN(c.accuracy)) ? 9999 : c.accuracy;
 
-    // 속도: 하드웨어 값 우선, 없으면 직전 포인트와의 차분
-    let kmh = null, source = 'gps';
-    if (c.speed !== null && !Number.isNaN(c.speed)) {
-      kmh = c.speed * 3.6;
-    } else if (prev) {
-      const dt = (t - prev.t) / 1000;
-      if (dt > 0) { kmh = haversine(prev, pt) / dt * 3.6; source = 'calc'; }
+    // 칼만 평활 — 거리·속도 계산은 평활 좌표로, CSV에는 원좌표도 함께 남긴다
+    const f = (acc <= p.ACC_MAX) ? kalman(c.latitude, c.longitude, acc, t) : null;
+    const pt = f ? { lat: f.lat, lon: f.lon, t, sigma: f.sigma } : null;
+    if (firstFixT === null) firstFixT = t;
+    lastFixT = t;
+
+    // 1) 하드웨어(도플러) 속도 — 있으면 가장 신뢰할 만한 값
+    let gpsKmh = null;
+    if (c.speed !== null && !Number.isNaN(c.speed) && c.speed >= 0) {
+      const v = c.speed * 3.6;
+      if (v <= p.V_MAX * 1.5) gpsKmh = v;
     }
-    if (kmh === null) { kmh = 0; source = 'none'; }
-    if (kmh < 0) kmh = 0;
 
-    // 누적 거리
-    if (prev) cumDist += haversine(prev, pt);
-    prev = pt;
+    // 2) 좌표 차분 속도 — 게이트를 모두 통과해야만 산출
+    let calcKmh = null, segDt = null, segDist = null;
+    let ok = false, reason = '';
 
-    const elapsedS = (t - startedAt) / 1000;
+    if (acc > p.ACC_MAX) {
+      reason = 'accuracy';                       // 위치오차 과다 → 기준점도 갱신하지 않음
+    } else if (!anchor) {
+      anchor = pt; reason = 'first_fix';
+    } else {
+      segDt = (t - anchor.t) / 1000;
+      segDist = haversine(anchor, pt);
+      const noise = Math.max(pt.sigma, anchor.sigma) * p.NOISE_K;
+
+      if (segDt < p.MIN_DT) {
+        reason = 'min_dt';                       // 간격이 짧음 → 다음 포인트까지 대기
+      } else if (segDist < noise) {
+        if (segDt >= p.HOLD_MAX) {               // 오래 안 움직임 → 정지로 확정
+          calcKmh = 0; ok = true; reason = 'stationary'; anchor = pt;
+        } else {
+          reason = 'jitter_hold';                // 오차 범위 내 흔들림 → 무시하고 대기
+        }
+      } else {
+        const v = segDist / segDt * 3.6;
+        if (v > p.V_MAX) {
+          reason = 'v_max';                      // 비현실적 속도 → 버리고 기준점만 갱신
+          anchor = pt;
+        } else {
+          calcKmh = v; ok = true; reason = 'moved';
+          cumDist += segDist;                    // 채택된 구간만 거리에 반영
+          anchor = pt;
+        }
+      }
+    }
+
+    // 3) 최종 속도 선택: 하드웨어 값 우선, 없으면 차분값
+    let kmh = null, source = '';
+    if (gpsKmh !== null && acc <= p.ACC_MAX) { kmh = gpsKmh; source = 'gps'; }
+    else if (calcKmh !== null)               { kmh = calcKmh; source = 'calc'; }
+    else                                     { source = reason; }
+
+    // 4) 표시용 평활 (CSV에는 원본만 기록)
+    if (kmh !== null) {
+      ema = (ema === null) ? kmh : p.EMA * kmh + (1 - p.EMA) * ema;
+      if (ema > maxKmh) maxKmh = ema;
+    }
+    if (ok) accepted++;
+
+    // 5) 로우데이터는 버리지 않고 전부 기록 — 필터 판정만 컬럼으로 남긴다
     rows.push({
       seq: rows.length + 1,
       datetime: localStamp(t),
       epoch_ms: t,
-      elapsed_s: elapsedS.toFixed(3),
+      elapsed_s: ((t - startedAt) / 1000).toFixed(3),
       lat: c.latitude.toFixed(7),
       lon: c.longitude.toFixed(7),
-      speed_kmh: kmh.toFixed(2),
-      speed_ms: (kmh / 3.6).toFixed(3),
-      speed_source: source,
-      accuracy_m: c.accuracy === null ? '' : c.accuracy.toFixed(1),
+      lat_kf: f ? f.lat.toFixed(7) : '',
+      lon_kf: f ? f.lon.toFixed(7) : '',
+      kf_sigma_m: f ? f.sigma.toFixed(2) : '',
+      accuracy_m: acc === 9999 ? '' : acc.toFixed(1),
       altitude_m: c.altitude === null ? '' : c.altitude.toFixed(1),
-      heading_deg: c.heading === null || Number.isNaN(c.heading) ? '' : c.heading.toFixed(1),
+      heading_deg: (c.heading === null || Number.isNaN(c.heading)) ? '' : c.heading.toFixed(1),
+      speed_kmh: kmh === null ? '' : kmh.toFixed(2),
+      speed_ms: kmh === null ? '' : (kmh / 3.6).toFixed(3),
+      speed_source: source,
+      speed_gps_kmh: gpsKmh === null ? '' : gpsKmh.toFixed(2),
+      speed_calc_kmh: calcKmh === null ? '' : calcKmh.toFixed(2),
+      seg_dt_s: segDt === null ? '' : segDt.toFixed(3),
+      seg_dist_m: segDist === null ? '' : segDist.toFixed(2),
+      accepted: ok ? 1 : 0,
+      reason: reason,
+      mode: mode,
       cum_dist_m: cumDist.toFixed(2)
     });
 
-    if (kmh > maxKmh) maxKmh = kmh;
-    render(kmh, source);
+    render({ kmh, source, reason, acc, segDt, segDist });
+
+    // 상태가 바뀔 때만 로그 (스팸 방지)
+    if (reason !== lastReason) {
+      const note = {
+        accuracy: `위치오차 ${acc.toFixed(0)}m — 기준(${p.ACC_MAX}m) 초과로 제외 중`,
+        jitter_hold: '오차 범위 내 흔들림 — 이동으로 보지 않음',
+        min_dt: `샘플 간격이 ${p.MIN_DT}초 미만 — 누적 대기`,
+        v_max: `비현실적 속도 감지 — 해당 구간 폐기`,
+        stationary: '정지 상태로 판정',
+        moved: '이동 구간 채택'
+      }[reason];
+      if (note) log(note, reason === 'moved' ? 'ok' : (reason === 'accuracy' || reason === 'v_max' ? 'warn' : ''));
+      lastReason = reason;
+    }
   }
 
   function onError(err) {
@@ -223,16 +366,31 @@
     if (err.code === 1) stop();
   }
 
-  function render(kmh, source) {
-    el.spd.textContent = kmh === undefined ? '--' : kmh.toFixed(1);
-    if (source) {
-      const label = { gps: 'GPS 측정값', calc: '좌표 차분 계산값', none: '속도 없음' }[source];
-      el.src.textContent = label;
+  const LABEL = {
+    gps: 'GPS 측정값', calc: '좌표 차분 계산값',
+    accuracy: '위치오차 과다 — 제외됨', jitter_hold: 'GPS 흔들림 — 대기 중',
+    min_dt: '샘플 대기 중', v_max: '이상값 폐기', stationary: '정지',
+    first_fix: '기준점 설정 중'
+  };
+
+  function render(d) {
+    const p = P();
+    if (d) {
+      el.spd.textContent = ema === null ? '--' : ema.toFixed(1);
+      el.src.textContent = LABEL[d.source] || d.source;
+      el.src.className = 'src' +
+        (d.source === 'accuracy' || d.source === 'v_max' ? ' bad'
+         : (d.source === 'jitter_hold' || d.source === 'min_dt' ? ' hold' : ''));
+
+      el.dAcc.textContent = d.acc >= 9999 ? '--' : `±${d.acc.toFixed(0)}m`;
+      el.dAcc.className = 'v' + (d.acc > p.ACC_MAX ? ' bad' : (d.acc > p.ACC_MAX * 0.6 ? ' warn' : ''));
+      el.dDt.textContent = d.segDt === null ? '--' : `${d.segDt.toFixed(1)}s`;
+      el.dSeg.textContent = d.segDist === null ? '--' : `${d.segDist.toFixed(1)}m`;
     }
-    el.count.innerHTML = rows.length + '<small>개</small>';
+    el.count.textContent = `${rows.length} / ${accepted}`;
     el.dist.innerHTML = (cumDist / 1000).toFixed(2) + '<small>km</small>';
-    const avg = cumDist > 0 && startedAt
-      ? cumDist / ((Date.now() - startedAt) / 1000) * 3.6 : 0;
+    const span = (firstFixT !== null && lastFixT > firstFixT) ? (lastFixT - firstFixT) / 1000 : 0;
+    const avg = (cumDist > 0 && span > 0) ? cumDist / span * 3.6 : 0;
     el.minmax.textContent = `${maxKmh.toFixed(0)} / ${avg.toFixed(0)}`;
   }
 
@@ -241,21 +399,27 @@
     el.elapsed.textContent = fmtElapsed((Date.now() - startedAt) / 1000);
   }
 
-  // ── 시작 / 정지
+  function setMode(m) {
+    if (watchId !== null) { log('측정 중에는 모드를 바꿀 수 없습니다.', 'warn'); return; }
+    mode = m;
+    el.mWalk.className = m === 'walk' ? 'on' : '';
+    el.mCar.className = m === 'car' ? 'on' : '';
+    const p = P();
+    log(`${m === 'walk' ? '도보' : '차량'} 모드 — 오차허용 ${p.ACC_MAX}m, 최소간격 ${p.MIN_DT}s, 상한 ${p.V_MAX}km/h`);
+  }
+
   function start() {
     if (!('geolocation' in navigator)) { log('이 브라우저는 위치 기능을 지원하지 않습니다.', 'err'); return; }
-    if (!window.isSecureContext) {
-      log('HTTPS(또는 localhost)가 아니면 위치 권한을 얻을 수 없습니다.', 'err');
-      return;
-    }
+    if (!window.isSecureContext) { log('HTTPS(또는 localhost)가 아니면 위치 권한을 얻을 수 없습니다.', 'err'); return; }
 
-    rows = []; prev = null; cumDist = 0; maxKmh = 0;
+    rows = []; anchor = null; cumDist = 0; maxKmh = 0; ema = null;
+    accepted = 0; lastReason = '';
+    firstFixT = null; lastFixT = null;
+    kf.variance = -1; kf.t = 0;
     startedAt = Date.now();
 
     watchId = navigator.geolocation.watchPosition(onPosition, onError, {
-      enableHighAccuracy: true,
-      maximumAge: 0,
-      timeout: 15000
+      enableHighAccuracy: true, maximumAge: 0, timeout: 20000
     });
 
     timer = setInterval(tick, 250);
@@ -264,11 +428,10 @@
     el.toggle.textContent = '측정 종료';
     el.toggle.className = 'rec';
     el.title.innerHTML = '<span class="rec-dot"></span>측정 중';
-    el.save.disabled = true;
-    el.clear.disabled = true;
+    el.save.disabled = true; el.clear.disabled = true;
     el.spd.textContent = '--';
-    el.src.textContent = 'GPS 신호 대기 중…';
-    log('측정을 시작했습니다.');
+    el.src.textContent = 'GPS 신호 대기 중…'; el.src.className = 'src';
+    log('측정을 시작했습니다. 처음 30초는 GPS가 안정될 때까지 오차가 큽니다.');
   }
 
   function stop() {
@@ -281,28 +444,31 @@
     el.title.textContent = 'GPS 속도 로거';
     el.save.disabled = rows.length === 0;
     el.clear.disabled = rows.length === 0;
+    el.src.className = 'src';
     el.src.textContent = rows.length ? '측정 종료' : '수집된 데이터 없음';
 
     if (rows.length) {
       const dur = (Date.now() - startedAt) / 1000;
-      log(`측정 종료 — ${rows.length}개 포인트, ${fmtElapsed(dur)}, ${(cumDist / 1000).toFixed(2)}km`);
+      log(`측정 종료 — 수집 ${rows.length} / 채택 ${accepted}, ${fmtElapsed(dur)}, ${(cumDist / 1000).toFixed(2)}km`);
+      if (accepted === 0) log('채택된 구간이 없습니다. 실외에서 다시 시도해 보세요.', 'warn');
     } else {
       log('수집된 포인트가 없습니다. GPS 신호를 잡지 못했을 수 있습니다.', 'warn');
     }
     startedAt = null;
   }
 
-  // ── CSV 저장 (UTF-8 BOM — 엑셀 한글 깨짐 방지)
+  const COLS = ['seq', 'datetime', 'epoch_ms', 'elapsed_s', 'lat', 'lon',
+                'lat_kf', 'lon_kf', 'kf_sigma_m', 'accuracy_m',
+                'altitude_m', 'heading_deg', 'speed_kmh', 'speed_ms', 'speed_source',
+                'speed_gps_kmh', 'speed_calc_kmh', 'seg_dt_s', 'seg_dist_m',
+                'accepted', 'reason', 'mode', 'cum_dist_m'];
+
   function saveCsv() {
     if (!rows.length) return;
-    const cols = ['seq', 'datetime', 'epoch_ms', 'elapsed_s', 'lat', 'lon',
-                  'speed_kmh', 'speed_ms', 'speed_source', 'accuracy_m',
-                  'altitude_m', 'heading_deg', 'cum_dist_m'];
-    const lines = [cols.join(',')];
-    for (const r of rows) lines.push(cols.map(c => r[c]).join(','));
+    const lines = [COLS.join(',')];
+    for (const r of rows) lines.push(COLS.map(c => r[c]).join(','));
 
-    const blob = new Blob(['﻿' + lines.join('\r\n') + '\r\n'],
-                          { type: 'text/csv;charset=utf-8;' });
+    const blob = new Blob(['﻿' + lines.join('\r\n') + '\r\n'], { type: 'text/csv;charset=utf-8;' });
     const d = new Date(rows[0].epoch_ms), p = n => String(n).padStart(2, '0');
     const name = `gpslog_${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}` +
                  `_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.csv`;
@@ -315,25 +481,30 @@
     log(`CSV 저장: ${name} (${rows.length}행)`);
   }
 
+  el.mWalk.addEventListener('click', () => setMode('walk'));
+  el.mCar.addEventListener('click', () => setMode('car'));
   el.toggle.addEventListener('click', () => (watchId === null ? start() : stop()));
   el.save.addEventListener('click', saveCsv);
   el.clear.addEventListener('click', () => {
-    rows = []; prev = null; cumDist = 0; maxKmh = 0;
-    el.spd.textContent = '--'; el.src.textContent = '대기 중';
+    rows = []; anchor = null; cumDist = 0; maxKmh = 0; ema = null;
+    accepted = 0; lastReason = '';
+    firstFixT = null; lastFixT = null;
+    kf.variance = -1; kf.t = 0;
+    el.spd.textContent = '--';
+    el.src.textContent = '대기 중'; el.src.className = 'src';
     el.elapsed.textContent = '00:00';
+    el.dAcc.textContent = el.dDt.textContent = el.dSeg.textContent = '--';
+    el.dAcc.className = 'v';
     render();
     el.save.disabled = true; el.clear.disabled = true;
     log('데이터를 초기화했습니다.');
   });
 
-  // 측정 중 이탈 방지
   window.addEventListener('beforeunload', e => {
     if (watchId !== null) { e.preventDefault(); e.returnValue = ''; }
   });
 
-  if (!window.isSecureContext) {
-    log('현재 HTTPS가 아닙니다. 휴대폰에서는 위치 권한이 차단됩니다.', 'warn');
-  }
+  if (!window.isSecureContext) log('현재 HTTPS가 아닙니다. 휴대폰에서는 위치 권한이 차단됩니다.', 'warn');
 })();
 </script>
 </body>

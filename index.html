@@ -57,6 +57,11 @@
   .diag .v.bad { color: var(--stop); }
   .diag .v.warn { color: var(--warn); }
   .diag .v.go { color: var(--go); }
+  .raw {
+    margin-top: 11px; padding-top: 10px; border-top: 1px solid var(--line);
+    font-size: 11px; color: var(--dim); letter-spacing: .01em;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
 
   .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
   .cell {
@@ -119,6 +124,7 @@
     <div><div class="k">측위방식</div><div class="v" id="dFix">--</div></div>
     <div><div class="k">순이동 / 직진도</div><div class="v" id="dNet">--</div></div>
   </div>
+  <div class="raw" id="dRaw">원시값 대기 중</div>
 </div>
 
 <div class="grid">
@@ -151,7 +157,7 @@
   const $ = id => document.getElementById(id);
   const el = {
     title: $('title'), spd: $('spd'), src: $('src'),
-    dAcc: $('dAcc'), dFix: $('dFix'), dNet: $('dNet'),
+    dAcc: $('dAcc'), dFix: $('dFix'), dNet: $('dNet'), dRaw: $('dRaw'),
     elapsed: $('elapsed'), count: $('count'), dist: $('dist'), minmax: $('minmax'),
     mWalk: $('mWalk'), mCar: $('mCar'), mStrict: $('mStrict'),
     toggle: $('toggle'), save: $('save'), clear: $('clear'), log: $('log')
@@ -181,6 +187,7 @@
   const MODES = {
     walk: {
       ACC_MAX: 30,      // 이 정확도(m)보다 나쁜 관측은 폐기
+      GNSS_ACC: 20,     // 이 값을 넘으면 위성 해가 아닌 것으로 본다
       V_MIN: 0.42,      // 도플러 속도가 이 값(m/s, ≈1.5km/h) 미만이면 정지
       V_MAX: 25,        // 물리적 상한 (km/h)
       WIN_T: 12,        // 판별 윈도우 길이 (s)
@@ -192,7 +199,7 @@
       EMA: 0.30
     },
     car: {
-      ACC_MAX: 45, V_MIN: 1.1, V_MAX: 250,
+      ACC_MAX: 45, GNSS_ACC: 25, V_MIN: 1.1, V_MAX: 250,
       WIN_T: 6, WIN_N: 3, STRAIGHT: 0.65, DISP_K: 1.0, MIN_DISP: 10,
       Q: 4.0, EMA: 0.45
     }
@@ -258,13 +265,15 @@
   //  GNSS 수신기는 고도·방위·속도를 함께 낸다. 이 셋이 모두 없고 정확도가
   //  나쁘면 WiFi/기지국 삼각측량(네트워크 측위)이며, 이 경우 좌표는
   //  '기지국 위치 추정치'라 이동과 무관하게 튄다.
+  //  주의: 안드로이드 FLP와 iOS CoreLocation은 WiFi 측위 결과에도 speed·
+  //  altitude를 채워서 내려준다. 따라서 '필드가 있으니 GNSS'는 성립하지
+  //  않는다. 소비자용 GNSS는 개활지에서 3~15m를 보고하므로, 정확도가
+  //  GNSS_ACC를 넘으면 위성 해가 아니라 융합 추정으로 본다.
   function fixType(c, acc) {
-    const hasVel = c.speed !== null && !Number.isNaN(c.speed);
     const hasAlt = c.altitude !== null && !Number.isNaN(c.altitude);
-    const hasHdg = c.heading !== null && !Number.isNaN(c.heading);
-    if (hasVel) return 'gnss';
-    if (hasAlt || hasHdg) return 'gnss';
-    return acc >= 20 ? 'network' : 'unknown';
+    if (acc > P().GNSS_ACC) return 'network';
+    if (!hasAlt) return 'network';     // 위성 해는 3차원이라 고도가 나온다
+    return 'gnss';
   }
 
   // ── 윈도우 기하: 순이동 / 경로길이 / 직진도
@@ -390,7 +399,12 @@
       cum_dist_m: cumDist.toFixed(2)
     });
 
-    render({ kmh, src, acc, ftype, ws });
+    const nn = v => (v === null || v === undefined || Number.isNaN(v)) ? 'null' : v;
+    const raw = `acc ${nn(acc === 9999 ? null : acc.toFixed(1))} · ` +
+                `alt ${nn(c.altitude === null ? null : c.altitude.toFixed(0))} · ` +
+                `hdg ${nn(c.heading === null || Number.isNaN(c.heading) ? null : c.heading.toFixed(0))} · ` +
+                `spd ${nn(c.speed === null || Number.isNaN(c.speed) ? null : c.speed.toFixed(2))}`;
+    render({ kmh, src, acc, ftype, ws, raw });
 
     if (src !== lastSrc) {
       const note = {
@@ -444,6 +458,7 @@
       el.dFix.textContent = { gnss: 'GNSS', network: '네트워크', unknown: '불명' }[d.ftype];
       el.dFix.className = 'v' + (d.ftype === 'gnss' ? ' go' : ' bad');
 
+      el.dRaw.textContent = d.raw;
       el.dNet.textContent = d.ws ? `${d.ws.net.toFixed(0)}m / ${d.ws.straight.toFixed(2)}` : '--';
       el.dNet.className = 'v' + (d.ws && d.ws.straight >= p.STRAIGHT ? ' go' : '');
     }
@@ -568,6 +583,7 @@
     el.src.textContent = '대기 중'; el.src.className = 'src';
     el.elapsed.textContent = '00:00';
     el.dAcc.textContent = el.dFix.textContent = el.dNet.textContent = '--';
+    el.dRaw.textContent = '원시값 대기 중';
     el.dAcc.className = el.dFix.className = el.dNet.className = 'v';
     render();
     el.save.disabled = true; el.clear.disabled = true;

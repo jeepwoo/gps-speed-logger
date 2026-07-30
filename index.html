@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0f14">
+<title>GPS 속도 로거</title>
+<style>
+  :root {
+    --bg: #0b0f14;
+    --panel: #151b23;
+    --line: #232c38;
+    --fg: #e8edf3;
+    --dim: #8b98a8;
+    --accent: #4ea3ff;
+    --go: #2ecc71;
+    --stop: #ff5a5a;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0;
+    padding: env(safe-area-inset-top) 16px calc(env(safe-area-inset-bottom) + 16px);
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo",
+                 "Noto Sans KR", "Segoe UI", sans-serif;
+    max-width: 520px;
+    margin-inline: auto;
+    user-select: none;
+  }
+  h1 {
+    font-size: 15px; font-weight: 600; letter-spacing: .02em;
+    color: var(--dim); margin: 20px 0 14px; text-align: center;
+  }
+
+  .speed {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 18px;
+    padding: 22px 16px 18px; text-align: center;
+  }
+  .speed .val {
+    font-size: 76px; font-weight: 700; line-height: 1;
+    font-variant-numeric: tabular-nums; letter-spacing: -.03em;
+  }
+  .speed .unit { font-size: 15px; color: var(--dim); margin-top: 8px; }
+  .speed .src { font-size: 12px; color: var(--dim); margin-top: 10px; min-height: 15px; }
+
+  .grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px;
+  }
+  .cell {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+    padding: 13px 14px;
+  }
+  .cell .k { font-size: 11px; color: var(--dim); letter-spacing: .04em; }
+  .cell .v {
+    font-size: 23px; font-weight: 600; margin-top: 5px;
+    font-variant-numeric: tabular-nums;
+  }
+  .cell .v small { font-size: 12px; color: var(--dim); font-weight: 400; margin-left: 3px; }
+
+  .btns { display: grid; gap: 10px; margin-top: 16px; }
+  button {
+    font: inherit; font-size: 17px; font-weight: 600;
+    padding: 17px; border-radius: 14px; border: 1px solid var(--line);
+    background: var(--panel); color: var(--fg); cursor: pointer;
+    transition: opacity .15s, transform .06s;
+  }
+  button:active:not(:disabled) { transform: scale(.985); }
+  button:disabled { opacity: .35; cursor: default; }
+  #toggle.idle { background: var(--go); border-color: var(--go); color: #06120a; }
+  #toggle.rec  { background: var(--stop); border-color: var(--stop); color: #1a0505; }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+  #log {
+    margin-top: 14px; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 12px; padding: 11px 13px; font-size: 12px; color: var(--dim);
+    line-height: 1.65; max-height: 128px; overflow-y: auto;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    white-space: pre-wrap; word-break: break-all;
+  }
+  .warn { color: #ffc44d; }
+  .err  { color: var(--stop); }
+  .rec-dot {
+    display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--stop); margin-right: 6px; vertical-align: 1px;
+    animation: blink 1.1s infinite;
+  }
+  @keyframes blink { 50% { opacity: .18; } }
+  @media (prefers-reduced-motion: reduce) { .rec-dot { animation: none; } }
+</style>
+</head>
+<body>
+
+<h1 id="title">GPS 속도 로거</h1>
+
+<div class="speed">
+  <div class="val" id="spd">--</div>
+  <div class="unit">km/h</div>
+  <div class="src" id="src">대기 중</div>
+</div>
+
+<div class="grid">
+  <div class="cell"><div class="k">경과 시간</div><div class="v" id="elapsed">00:00</div></div>
+  <div class="cell"><div class="k">수집 포인트</div><div class="v" id="count">0<small>개</small></div></div>
+  <div class="cell"><div class="k">누적 거리</div><div class="v" id="dist">0.00<small>km</small></div></div>
+  <div class="cell"><div class="k">최고 / 평균</div><div class="v" id="minmax">0 / 0</div></div>
+</div>
+
+<div class="btns">
+  <button id="toggle" class="idle">측정 시작</button>
+  <div class="row2">
+    <button id="save" disabled>CSV 저장</button>
+    <button id="clear" disabled>초기화</button>
+  </div>
+</div>
+
+<div id="log">준비됨. [측정 시작]을 누르면 위치 권한을 요청합니다.</div>
+
+<script>
+(() => {
+  'use strict';
+
+  const $ = id => document.getElementById(id);
+  const el = {
+    title: $('title'), spd: $('spd'), src: $('src'), elapsed: $('elapsed'),
+    count: $('count'), dist: $('dist'), minmax: $('minmax'),
+    toggle: $('toggle'), save: $('save'), clear: $('clear'), log: $('log')
+  };
+
+  let rows = [];          // 수집된 로우데이터
+  let watchId = null;
+  let wakeLock = null;
+  let timer = null;
+  let startedAt = null;
+  let prev = null;        // 직전 포인트 (속도 폴백 계산용)
+  let cumDist = 0;        // m
+  let maxKmh = 0;
+
+  const log = (msg, cls) => {
+    const t = new Date().toLocaleTimeString('ko-KR', { hour12: false });
+    el.log.innerHTML = `<span class="${cls || ''}">[${t}] ${msg}</span>\n` + el.log.innerHTML;
+  };
+
+  // ── 두 좌표 간 거리 (Haversine, m)
+  const haversine = (a, b) => {
+    const R = 6371000, rad = Math.PI / 180;
+    const dLat = (b.lat - a.lat) * rad, dLon = (b.lon - a.lon) * rad;
+    const la1 = a.lat * rad, la2 = b.lat * rad;
+    const h = Math.sin(dLat / 2) ** 2 + Math.cos(la1) * Math.cos(la2) * Math.sin(dLon / 2) ** 2;
+    return 2 * R * Math.asin(Math.sqrt(h));
+  };
+
+  // ── 로컬 시각을 ISO 유사 문자열로 (엑셀이 바로 인식)
+  const localStamp = ms => {
+    const d = new Date(ms), p = (n, w = 2) => String(n).padStart(w, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ` +
+           `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
+  };
+
+  const fmtElapsed = s => {
+    const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), sec = Math.floor(s % 60);
+    const p = n => String(n).padStart(2, '0');
+    return h ? `${h}:${p(m)}:${p(sec)}` : `${p(m)}:${p(sec)}`;
+  };
+
+  // ── 화면 꺼짐 방지
+  async function acquireWakeLock() {
+    if (!('wakeLock' in navigator)) { log('WakeLock 미지원 — 화면이 꺼지면 수집이 멈춥니다.', 'warn'); return; }
+    try {
+      wakeLock = await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener('release', () => log('화면 잠금 해제됨.', 'warn'));
+    } catch (e) { log('WakeLock 실패: ' + e.message, 'warn'); }
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && watchId !== null && !wakeLock) acquireWakeLock();
+  });
+
+  // ── 위치 수신
+  function onPosition(pos) {
+    const c = pos.coords;
+    const t = pos.timestamp;
+    const pt = { lat: c.latitude, lon: c.longitude, t };
+
+    // 속도: 하드웨어 값 우선, 없으면 직전 포인트와의 차분
+    let kmh = null, source = 'gps';
+    if (c.speed !== null && !Number.isNaN(c.speed)) {
+      kmh = c.speed * 3.6;
+    } else if (prev) {
+      const dt = (t - prev.t) / 1000;
+      if (dt > 0) { kmh = haversine(prev, pt) / dt * 3.6; source = 'calc'; }
+    }
+    if (kmh === null) { kmh = 0; source = 'none'; }
+    if (kmh < 0) kmh = 0;
+
+    // 누적 거리
+    if (prev) cumDist += haversine(prev, pt);
+    prev = pt;
+
+    const elapsedS = (t - startedAt) / 1000;
+    rows.push({
+      seq: rows.length + 1,
+      datetime: localStamp(t),
+      epoch_ms: t,
+      elapsed_s: elapsedS.toFixed(3),
+      lat: c.latitude.toFixed(7),
+      lon: c.longitude.toFixed(7),
+      speed_kmh: kmh.toFixed(2),
+      speed_ms: (kmh / 3.6).toFixed(3),
+      speed_source: source,
+      accuracy_m: c.accuracy === null ? '' : c.accuracy.toFixed(1),
+      altitude_m: c.altitude === null ? '' : c.altitude.toFixed(1),
+      heading_deg: c.heading === null || Number.isNaN(c.heading) ? '' : c.heading.toFixed(1),
+      cum_dist_m: cumDist.toFixed(2)
+    });
+
+    if (kmh > maxKmh) maxKmh = kmh;
+    render(kmh, source);
+  }
+
+  function onError(err) {
+    const map = { 1: '위치 권한이 거부되었습니다.', 2: '위치를 확인할 수 없습니다.', 3: '위치 확인 시간 초과.' };
+    log((map[err.code] || err.message), 'err');
+    if (err.code === 1) stop();
+  }
+
+  function render(kmh, source) {
+    el.spd.textContent = kmh === undefined ? '--' : kmh.toFixed(1);
+    if (source) {
+      const label = { gps: 'GPS 측정값', calc: '좌표 차분 계산값', none: '속도 없음' }[source];
+      el.src.textContent = label;
+    }
+    el.count.innerHTML = rows.length + '<small>개</small>';
+    el.dist.innerHTML = (cumDist / 1000).toFixed(2) + '<small>km</small>';
+    const avg = cumDist > 0 && startedAt
+      ? cumDist / ((Date.now() - startedAt) / 1000) * 3.6 : 0;
+    el.minmax.textContent = `${maxKmh.toFixed(0)} / ${avg.toFixed(0)}`;
+  }
+
+  function tick() {
+    if (!startedAt) return;
+    el.elapsed.textContent = fmtElapsed((Date.now() - startedAt) / 1000);
+  }
+
+  // ── 시작 / 정지
+  function start() {
+    if (!('geolocation' in navigator)) { log('이 브라우저는 위치 기능을 지원하지 않습니다.', 'err'); return; }
+    if (!window.isSecureContext) {
+      log('HTTPS(또는 localhost)가 아니면 위치 권한을 얻을 수 없습니다.', 'err');
+      return;
+    }
+
+    rows = []; prev = null; cumDist = 0; maxKmh = 0;
+    startedAt = Date.now();
+
+    watchId = navigator.geolocation.watchPosition(onPosition, onError, {
+      enableHighAccuracy: true,
+      maximumAge: 0,
+      timeout: 15000
+    });
+
+    timer = setInterval(tick, 250);
+    acquireWakeLock();
+
+    el.toggle.textContent = '측정 종료';
+    el.toggle.className = 'rec';
+    el.title.innerHTML = '<span class="rec-dot"></span>측정 중';
+    el.save.disabled = true;
+    el.clear.disabled = true;
+    el.spd.textContent = '--';
+    el.src.textContent = 'GPS 신호 대기 중…';
+    log('측정을 시작했습니다.');
+  }
+
+  function stop() {
+    if (watchId !== null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
+    if (timer) { clearInterval(timer); timer = null; }
+    if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
+
+    el.toggle.textContent = '측정 시작';
+    el.toggle.className = 'idle';
+    el.title.textContent = 'GPS 속도 로거';
+    el.save.disabled = rows.length === 0;
+    el.clear.disabled = rows.length === 0;
+    el.src.textContent = rows.length ? '측정 종료' : '수집된 데이터 없음';
+
+    if (rows.length) {
+      const dur = (Date.now() - startedAt) / 1000;
+      log(`측정 종료 — ${rows.length}개 포인트, ${fmtElapsed(dur)}, ${(cumDist / 1000).toFixed(2)}km`);
+    } else {
+      log('수집된 포인트가 없습니다. GPS 신호를 잡지 못했을 수 있습니다.', 'warn');
+    }
+    startedAt = null;
+  }
+
+  // ── CSV 저장 (UTF-8 BOM — 엑셀 한글 깨짐 방지)
+  function saveCsv() {
+    if (!rows.length) return;
+    const cols = ['seq', 'datetime', 'epoch_ms', 'elapsed_s', 'lat', 'lon',
+                  'speed_kmh', 'speed_ms', 'speed_source', 'accuracy_m',
+                  'altitude_m', 'heading_deg', 'cum_dist_m'];
+    const lines = [cols.join(',')];
+    for (const r of rows) lines.push(cols.map(c => r[c]).join(','));
+
+    const blob = new Blob(['﻿' + lines.join('\r\n') + '\r\n'],
+                          { type: 'text/csv;charset=utf-8;' });
+    const d = new Date(rows[0].epoch_ms), p = n => String(n).padStart(2, '0');
+    const name = `gpslog_${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}` +
+                 `_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.csv`;
+
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    log(`CSV 저장: ${name} (${rows.length}행)`);
+  }
+
+  el.toggle.addEventListener('click', () => (watchId === null ? start() : stop()));
+  el.save.addEventListener('click', saveCsv);
+  el.clear.addEventListener('click', () => {
+    rows = []; prev = null; cumDist = 0; maxKmh = 0;
+    el.spd.textContent = '--'; el.src.textContent = '대기 중';
+    el.elapsed.textContent = '00:00';
+    render();
+    el.save.disabled = true; el.clear.disabled = true;
+    log('데이터를 초기화했습니다.');
+  });
+
+  // 측정 중 이탈 방지
+  window.addEventListener('beforeunload', e => {
+    if (watchId !== null) { e.preventDefault(); e.returnValue = ''; }
+  });
+
+  if (!window.isSecureContext) {
+    log('현재 HTTPS가 아닙니다. 휴대폰에서는 위치 권한이 차단됩니다.', 'warn');
+  }
+})();
+</script>
+</body>
+</html>
